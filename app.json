@@ -1,0 +1,20 @@
+{
+  "expo": {
+    "name": "Easy Agent",
+    "slug": "agent-reactnative",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "android": {
+      "package": "easy.agent.reactnative"
+    },
+    "ios": {
+      "bundleIdentifier": "easy.agent.reactnative",
+      "supportsTablet": true
+    },
+    "web": {
+      "bundler": "metro"
+    }
+  }
+}
