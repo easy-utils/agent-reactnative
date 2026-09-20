@@ -11,7 +11,7 @@ import {
 import { AgentApi } from '../lib/api'
 import { colors } from '../theme'
 
-const DEFAULT_BASE = 'https://agent.temp.10.199.64.20.nip.io'
+const DEFAULT_BASE = 'https://agent.agent.10.199.64.20.nip.io'
 
 export function ConnectScreen({
   onConnected,
