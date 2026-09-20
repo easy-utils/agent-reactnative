@@ -6,13 +6,34 @@ import {
   AgentServiceClient,
   ListSessionsRequestSchema,
   CreateSessionRequestSchema,
+  GetSessionRequestSchema,
+  DeleteSessionRequestSchema,
   ListMessagesRequestSchema,
   PromptRequestSchema,
   WatchSessionRequestSchema,
   HealthRequestSchema,
+  GetIdentityRequestSchema,
   SetModelRequestSchema,
+  UpdateSettingsRequestSchema,
+  ListPresetsRequestSchema,
+  UpsertPresetRequestSchema,
+  DeletePresetRequestSchema,
+  ListProvidersRequestSchema,
+  ListModelsRequestSchema,
+  RegisterProviderRequestSchema,
+  DeleteProviderRequestSchema,
+  TestProviderRequestSchema,
+  ListToolsRequestSchema,
+  GetConfigRequestSchema,
+  SetConfigRequestSchema,
+  MailboxRequestSchema,
   Session,
   Message,
+  Preset,
+  Provider,
+  ToolInfo,
+  ModelInfo,
+  MailboxEntry,
 } from '@easy-utils/agent-sdk-typescript'
 import { connect } from '@easy-utils/easy-rpc'
 
@@ -24,6 +45,47 @@ export interface StreamEvent {
 
 export interface SessionRef {
   id: string
+  model: string
+  preset: string
+  locale: string
+  unreadCount: number
+  lastMessagePreview: string
+}
+
+export interface Identity {
+  tenant: string
+  tenantName: string
+  role: string
+}
+
+export interface PresetRef {
+  id: string
+  systemPrompt: string
+  tools: string[]
+  maxTurns: number
+  isSystem: boolean
+}
+
+export interface ProviderRef {
+  providerId: string
+  apiType: string
+  baseUrl: string
+  apiKey: string
+  capability: string
+  models: { id: string; name: string }[]
+}
+
+export interface ToolRef {
+  name: string
+  description: string
+  category: string
+}
+
+export interface MailboxRef {
+  id: string
+  msgType: string
+  payload: string
+  status: string
 }
 
 export class AgentApi {
@@ -39,9 +101,25 @@ export class AgentApi {
     await this.agent.health({})
   }
 
+  async identity(): Promise<Identity> {
+    const r = await this.agent.getIdentity({})
+    return { tenant: r.tenant, tenantName: r.tenantName, role: r.role }
+  }
+
+  async resolveUsername(): Promise<string> {
+    try {
+      const id = await this.identity()
+      return id.tenantName || id.tenant
+    } catch {
+      return ''
+    }
+  }
+
+  // ---- sessions ----
+
   async listSessions(): Promise<SessionRef[]> {
     const r = await this.agent.listSessions({})
-    return r.sessions.map((s) => ({ id: s.name }))
+    return r.sessions.map(sessionFromPb)
   }
 
   async createSession(name: string): Promise<string> {
@@ -49,8 +127,25 @@ export class AgentApi {
     return r.sessionName
   }
 
+  async deleteSession(id: string): Promise<void> {
+    await this.agent.deleteSession({ id })
+  }
+
   async setModel(id: string, model: string): Promise<void> {
     await this.agent.setModel({ id, model })
+  }
+
+  /** Only model/preset/locale/variant are client-editable (proto v0.18). */
+  async settings(
+    id: string,
+    updates: { model?: string; preset?: string; locale?: string; variant?: string },
+  ): Promise<void> {
+    const req: Record<string, unknown> = { id }
+    if (updates.model) req.model = updates.model
+    if (updates.preset) req.preset = updates.preset
+    req.locale = updates.locale ?? ''
+    req.variant = updates.variant ?? ''
+    await this.agent.updateSettings(req)
   }
 
   async listMessages(id: string, limit = 50): Promise<string[]> {
@@ -82,6 +177,112 @@ export class AgentApi {
         eid: ev.eid,
       })
     }
+  }
+
+  // ---- presets / providers / tools / config ----
+
+  async listPresets(locale?: string): Promise<PresetRef[]> {
+    const r = await this.agent.listPresets({ locale: locale ?? '' })
+    return r.presets.map((p: Preset) => ({
+      id: p.id,
+      systemPrompt: p.systemPrompt,
+      tools: p.tools,
+      maxTurns: p.maxTurns,
+      isSystem: p.isSystem,
+    }))
+  }
+
+  async savePreset(p: PresetRef): Promise<void> {
+    await this.agent.upsertPreset({
+      preset: {
+        id: p.id,
+        systemPrompt: p.systemPrompt,
+        tools: p.tools,
+        maxTurns: p.maxTurns,
+      },
+    })
+  }
+
+  async deletePreset(id: string): Promise<void> {
+    await this.agent.deletePreset({ id })
+  }
+
+  async listProviders(): Promise<ProviderRef[]> {
+    const r = await this.agent.listProviders({})
+    return r.providers.map((p: Provider) => ({
+      providerId: p.providerId,
+      apiType: p.apiType,
+      baseUrl: p.baseUrl,
+      apiKey: p.apiKey,
+      capability: p.capability,
+      models: p.models.map((m) => ({ id: m.id, name: m.name })),
+    }))
+  }
+
+  async listModels(providerId: string): Promise<ModelInfo[]> {
+    const r = await this.agent.listModels({ providerId })
+    return r.models
+  }
+
+  async registerProvider(p: ProviderRef): Promise<void> {
+    await this.agent.registerProvider({
+      provider: {
+        providerId: p.providerId,
+        apiType: p.apiType,
+        baseUrl: p.baseUrl,
+        apiKey: p.apiKey,
+        capability: p.capability,
+        models: p.models.map((m) => ({ id: m.id, name: m.name, modelType: p.capability })),
+      },
+    })
+  }
+
+  async deleteProvider(providerId: string): Promise<void> {
+    await this.agent.deleteProvider({ providerId })
+  }
+
+  async testProvider(providerId: string, model: string): Promise<[boolean, string]> {
+    const r = await this.agent.testProvider({ providerId, model })
+    return [r.ok, r.result ?? '']
+  }
+
+  async listTools(locale?: string): Promise<ToolRef[]> {
+    const r = await this.agent.listTools({ locale: locale ?? '' })
+    return r.tools.map((t: ToolInfo) => ({
+      name: t.name,
+      description: t.description,
+      category: t.category,
+    }))
+  }
+
+  async getConfig(key: string): Promise<string> {
+    const r = await this.agent.getConfig({ key })
+    return r.value
+  }
+
+  async setConfig(key: string, value: string): Promise<void> {
+    await this.agent.setConfig({ key, value })
+  }
+
+  async mailbox(id: string): Promise<MailboxRef[]> {
+    const r = await this.agent.mailbox({ id })
+    return r.mailbox.map((m: MailboxEntry) => ({
+      id: m.id,
+      msgType: m.msgType,
+      payload: m.payload,
+      status: m.status,
+    }))
+  }
+}
+
+function sessionFromPb(s: Session): SessionRef {
+  return {
+    id: s.name,
+    model: s.model,
+    preset: s.preset,
+    locale: s.locale,
+    unreadCount: 0,
+    lastMessagePreview: '',
   }
 }
 
