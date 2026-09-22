@@ -86,6 +86,21 @@ export interface MailboxRef {
   msgType: string
   payload: string
   status: string
+  /** ORIGIN: user / session:{name} / system:{name} / extension-defined. */
+  source: string
+}
+
+/** One page of the mailbox (newest-first) plus whether older entries exist. */
+export interface MailboxPage {
+  entries: MailboxRef[]
+  hasMore: boolean
+}
+
+/** A rendered transcript line with its message ORIGIN for provenance. */
+export interface TranscriptLine {
+  text: string
+  role: string
+  source: string
 }
 
 export class AgentApi {
@@ -131,6 +146,11 @@ export class AgentApi {
     await this.agent.deleteSession({ id })
   }
 
+  /** Fork a session into a new branch (without opening it). */
+  async fork(id: string, branch: string): Promise<void> {
+    await this.agent.fork({ id, name: branch })
+  }
+
   async setModel(id: string, model: string): Promise<void> {
     await this.agent.setModel({ id, model })
   }
@@ -148,7 +168,7 @@ export class AgentApi {
     await this.agent.updateSettings(req)
   }
 
-  async listMessages(id: string, limit = 50): Promise<string[]> {
+  async listMessages(id: string, limit = 50): Promise<TranscriptLine[]> {
     const r = await this.agent.listMessages({ id, limit })
     return messagesToLines(r.messages)
   }
@@ -264,14 +284,19 @@ export class AgentApi {
     await this.agent.setConfig({ key, value })
   }
 
-  async mailbox(id: string): Promise<MailboxRef[]> {
-    const r = await this.agent.mailbox({ id })
-    return r.mailbox.map((m: MailboxEntry) => ({
-      id: m.id,
-      msgType: m.msgType,
-      payload: m.payload,
-      status: m.status,
-    }))
+  /** One page of the mailbox (NEWEST-FIRST, paged backward). */
+  async mailbox(id: string, before = '', limit = 0): Promise<MailboxPage> {
+    const r = await this.agent.mailbox({ id, before, limit })
+    return {
+      hasMore: r.hasMore,
+      entries: r.mailbox.map((m: MailboxEntry) => ({
+        id: m.id,
+        msgType: m.msgType,
+        payload: m.payload,
+        status: m.status,
+        source: m.source,
+      })),
+    }
   }
 }
 
@@ -286,10 +311,17 @@ function sessionFromPb(s: Session): SessionRef {
   }
 }
 
-function messagesToLines(messages: Message[]): string[] {
-  const lines: string[] = []
+function messagesToLines(messages: Message[]): TranscriptLine[] {
+  const lines: TranscriptLine[] = []
   for (const m of messages) {
     const who = m.role === 'user' ? 'You' : m.role === 'assistant' ? 'Agent' : m.role
+    // A `session:{name}` user message is a hand-off from another session; label
+    // it with its origin instead of "You".
+    const label = m.source.startsWith('session:')
+      ? `[${m.source.slice('session:'.length)}]`
+      : m.source.startsWith('system:')
+        ? `[system:${m.source.slice('system:'.length)}]`
+        : who
     for (const p of m.parts) {
       let d: any = {}
       try {
@@ -299,9 +331,9 @@ function messagesToLines(messages: Message[]): string[] {
       }
       if (p.type === 'text' || p.type === 'reasoning') {
         const text = (d.text as string) ?? ''
-        if (text.trim()) lines.push(`${who}: ${text}`)
+        if (text.trim()) lines.push({ text: `${label}: ${text}`, role: m.role, source: m.source })
       } else if (p.type === 'tool') {
-        lines.push(`[tool: ${(d.name as string) ?? 'tool'}]`)
+        lines.push({ text: `[tool: ${(d.name as string) ?? 'tool'}]`, role: m.role, source: m.source })
       }
     }
   }

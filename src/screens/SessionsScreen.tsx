@@ -1,6 +1,7 @@
 import React from 'react'
 import {
   ActivityIndicator,
+  Alert,
   FlatList,
   Pressable,
   StyleSheet,
@@ -51,6 +52,33 @@ export function SessionsScreen({
     }
   }, [api, refresh])
 
+  // Long-press a row → fork (without opening). Alert.prompt is iOS-only, so
+  // other platforms fork with a timestamped branch name.
+  const fork = React.useCallback(
+    async (id: string) => {
+      const branch = `fork-${Date.now()}`
+      const doFork = async (name: string) => {
+        try {
+          await api.fork(id, name)
+          await refresh()
+        } catch (e) {
+          setStatus(`Fork failed: ${String(e)}`)
+        }
+      }
+      const anyAlert = Alert as unknown as {
+        prompt?: (t: string, m: string, cb: (v: string) => void, ty: string, d: string) => void
+      }
+      if (typeof anyAlert.prompt === 'function') {
+        anyAlert.prompt('Fork', 'Branch name', (v) => {
+          if (v && v.trim()) void doFork(v.trim())
+        }, 'plain-text', branch)
+      } else {
+        void doFork(branch)
+      }
+    },
+    [api, refresh],
+  )
+
   return (
     <View style={styles.root}>
       <View style={styles.header}>
@@ -74,7 +102,11 @@ export function SessionsScreen({
         keyExtractor={(s) => s.id}
         contentContainerStyle={styles.list}
         renderItem={({ item }) => (
-          <Pressable style={styles.row} onPress={() => onOpen(item.id)}>
+          <Pressable
+            style={styles.row}
+            onPress={() => onOpen(item.id)}
+            onLongPress={() => fork(item.id)}
+          >
             <Text style={styles.rowText}>{item.id}</Text>
           </Pressable>
         )}

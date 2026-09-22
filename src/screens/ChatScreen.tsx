@@ -8,9 +8,12 @@ import {
   View,
 } from 'react-native'
 
-import { AgentApi } from '../lib/api'
+import { AgentApi, TranscriptLine } from '../lib/api'
 import { colors } from '../theme'
 
+// Chat transcript with message provenance: a `session:{name}` hand-off is
+// incoming (left, origin label), `system:{name}` a centred notice, own prompts
+// right-aligned. Matches the Flutter/Compose/SwiftUI/webui rendering.
 export function ChatScreen({
   api,
   sessionId,
@@ -20,22 +23,26 @@ export function ChatScreen({
   sessionId: string
   onBack: () => void
 }) {
-  const [lines, setLines] = React.useState<string[]>([])
+  const [lines, setLines] = React.useState<TranscriptLine[]>([])
   const [composer, setComposer] = React.useState('')
-  const listRef = React.useRef<FlatList<string>>(null)
-  const linesRef = React.useRef<string[]>([])
+  const listRef = React.useRef<FlatList<TranscriptLine>>(null)
+  const linesRef = React.useRef<TranscriptLine[]>([])
   linesRef.current = lines
 
-  const append = React.useCallback((text: string) => {
+  const append = React.useCallback((text: string, source = '') => {
     setLines((prev) => {
       const next = [...prev]
-      if (next.length === 0) next.push(text)
-      else next[next.length - 1] += text
+      if (next.length === 0) next.push({ text, role: 'assistant', source })
+      else
+        next[next.length - 1] = {
+          ...next[next.length - 1],
+          text: next[next.length - 1].text + text,
+        }
       return next
     })
   }, [])
 
-  const push = React.useCallback((line: string) => {
+  const push = React.useCallback((line: TranscriptLine) => {
     setLines((prev) => [...prev, line])
   }, [])
 
@@ -63,11 +70,11 @@ export function ChatScreen({
               append(`[reasoning] ${String(params.text ?? '')}`)
               break
             case 'tool-call':
-              push(
-                `\n[tool: ${String(
-                  params.toolName ?? params.name ?? 'tool',
-                )}]\n`,
-              )
+              push({
+                text: `\n[tool: ${String(params.toolName ?? params.name ?? 'tool')}]\n`,
+                role: 'assistant',
+                source: '',
+              })
               break
           }
         },
@@ -86,8 +93,9 @@ export function ChatScreen({
     const text = composer.trim()
     if (!text) return
     setComposer('')
-    push(`You: ${text}`)
-    push('Agent: ')
+    // The user bubble is server-authored (message-added); we only show a
+    // streaming Agent placeholder for the reply.
+    push({ text: 'Agent: ', role: 'assistant', source: '' })
     try {
       await api.prompt(sessionId, text)
     } catch (e) {
@@ -111,11 +119,7 @@ export function ChatScreen({
         keyExtractor={(_, i) => String(i)}
         contentContainerStyle={styles.list}
         onContentSizeChange={() => listRef.current?.scrollToEnd({ animated: true })}
-        renderItem={({ item }) => (
-          <View style={styles.bubble}>
-            <Text style={styles.bubbleText}>{item}</Text>
-          </View>
-        )}
+        renderItem={({ item }) => <Bubble line={item} />}
       />
       <View style={styles.composerRow}>
         <TextInput
@@ -129,6 +133,33 @@ export function ChatScreen({
         <Pressable style={styles.send} onPress={send}>
           <Text style={styles.actionText}>Send</Text>
         </Pressable>
+      </View>
+    </View>
+  )
+}
+
+function Bubble({ line }: { line: TranscriptLine }) {
+  const isSession = line.source.startsWith('session:')
+  const isSystem = line.source.startsWith('system:')
+  const isOwn = line.role === 'user' && !isSession && !isSystem
+  const align = isSystem ? 'center' : isOwn ? 'flex-end' : 'flex-start'
+  const bg = isSession
+    ? 'rgba(14,165,233,0.10)'
+    : isSystem
+      ? colors.panelAlt
+      : isOwn
+        ? 'rgba(37,99,235,0.12)'
+        : colors.panel
+  const label = isSession
+    ? `From session · ${line.source.slice('session:'.length)}`
+    : isSystem
+      ? `From system · ${line.source.slice('system:'.length)}`
+      : null
+  return (
+    <View style={[styles.bubbleRow, { alignItems: align }]}>
+      <View style={[styles.bubble, { backgroundColor: bg }]}>
+        {label != null && <Text style={styles.chip}>{label}</Text>}
+        <Text style={styles.bubbleText}>{line.text}</Text>
       </View>
     </View>
   )
@@ -152,12 +183,13 @@ const styles = StyleSheet.create({
   },
   actionText: { color: colors.fg, fontSize: 13 },
   list: { padding: 12 },
+  bubbleRow: { width: '100%', marginBottom: 8 },
   bubble: {
-    backgroundColor: colors.panel,
     borderRadius: 8,
     padding: 10,
-    marginBottom: 8,
+    maxWidth: '90%',
   },
+  chip: { color: '#0284C7', fontSize: 10, fontWeight: '600', marginBottom: 2 },
   bubbleText: { color: colors.fg },
   composerRow: {
     flexDirection: 'row',

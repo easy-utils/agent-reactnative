@@ -1,7 +1,7 @@
 import React from 'react'
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native'
 
-import { AgentApi, Identity, PresetRef, ProviderRef, ToolRef } from '../lib/api'
+import { AgentApi, Identity, MailboxRef, PresetRef, ProviderRef, ToolRef } from '../lib/api'
 import { AppPage, CONFIG_SUB_IDS, NavStore, SIDER_TABS, SiderTab } from '../navigation'
 import { colors } from '../theme'
 
@@ -109,19 +109,66 @@ function ToolsScreen({ api }: { api: AgentApi }) {
   )
 }
 
+// (msgType, source) → label, mirroring the other clients.
+function mailboxLabel(msgType: string, source: string): string {
+  if (msgType === 'interrupt') return 'Interrupt'
+  if (msgType !== 'trigger') return 'Event'
+  if (source === 'user') return 'Message'
+  if (source.startsWith('session:')) return `From session · ${source.slice('session:'.length)}`
+  if (source.startsWith('system:')) return `From system · ${source.slice('system:'.length)}`
+  return 'Message'
+}
+
 export function MailboxScreen({ api, sessionId }: { api: AgentApi; sessionId: string }) {
-  const [rows, setRows] = React.useState<{ id: string; msgType: string; status: string }[]>([])
+  const [rows, setRows] = React.useState<MailboxRef[]>([])
+  const [hasMore, setHasMore] = React.useState(false)
+  const [loadingMore, setLoadingMore] = React.useState(false)
   React.useEffect(() => {
-    void api.mailbox(sessionId).then(setRows).catch(() => {})
+    void api
+      .mailbox(sessionId, '', 30)
+      .then((p) => {
+        setRows(p.entries)
+        setHasMore(p.hasMore)
+      })
+      .catch(() => {})
   }, [api, sessionId])
+
+  const loadMore = React.useCallback(async () => {
+    if (loadingMore || !hasMore || rows.length === 0) return
+    setLoadingMore(true)
+    try {
+      const p = await api.mailbox(sessionId, rows[rows.length - 1].id, 30)
+      setRows((prev) => [...prev, ...p.entries])
+      setHasMore(p.hasMore)
+    } catch {
+      // ignore
+    } finally {
+      setLoadingMore(false)
+    }
+  }, [api, sessionId, rows, hasMore, loadingMore])
+
   return (
-    <ScrollView style={styles.root} contentContainerStyle={styles.pad}>
+    <ScrollView
+      style={styles.root}
+      contentContainerStyle={styles.pad}
+      onScroll={({ nativeEvent }) => {
+        if (
+          nativeEvent.layoutMeasurement.height + nativeEvent.contentOffset.y >=
+          nativeEvent.contentSize.height - 120
+        ) {
+          void loadMore()
+        }
+      }}
+      scrollEventThrottle={200}
+    >
       {rows.map((m) => (
         <View key={m.id} style={styles.tile}>
-          <Text style={styles.tileText}>{m.msgType}</Text>
+          <Text style={styles.tileText}>{mailboxLabel(m.msgType, m.source)}</Text>
           <Text style={styles.dim}>{m.status}</Text>
+          {m.payload !== '' && <Text style={styles.dim}>{m.payload.slice(0, 200)}</Text>}
         </View>
       ))}
+      {hasMore && <Text style={styles.dim}>{loadingMore ? 'Loading…' : 'Load earlier'}</Text>}
       {rows.length === 0 && <Text style={styles.dim}>No mailbox entries.</Text>}
     </ScrollView>
   )
