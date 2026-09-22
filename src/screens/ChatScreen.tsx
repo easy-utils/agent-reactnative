@@ -76,6 +76,10 @@ export function ChatScreen({
                 source: '',
               })
               break
+            case 'error':
+              // A model error card, labelled by kind.
+              push({ text: `Model error: ${errorText(params)}`, role: 'error', source: '' })
+              break
           }
         },
         ac.signal,
@@ -93,15 +97,18 @@ export function ChatScreen({
     const text = composer.trim()
     if (!text) return
     setComposer('')
+    // An error is TRANSIENT: a new prompt clears any prior error line.
+    setLines((prev) => prev.filter((l) => l.role !== 'error'))
     // The user bubble is server-authored (message-added); we only show a
     // streaming Agent placeholder for the reply.
     push({ text: 'Agent: ', role: 'assistant', source: '' })
     try {
       await api.prompt(sessionId, text)
     } catch (e) {
-      append(`\n[error: ${String(e)}]`)
+      // The card TITLE says what failed; the body is the raw error.
+      push({ text: `Send failed: ${String(e)}`, role: 'error', source: '' })
     }
-  }, [api, sessionId, composer, push, append])
+  }, [api, sessionId, composer, push])
 
   return (
     <View style={styles.root}>
@@ -213,3 +220,15 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
   },
 })
+
+/** The message body of a streamed `error` event. */
+function errorText(params: Record<string, unknown>): string {
+  const e = params.error
+  if (typeof e === 'string') return e
+  if (e && typeof e === 'object') {
+    const m = (e as Record<string, unknown>).message
+    if (typeof m === 'string') return m
+  }
+  if (typeof params.message === 'string') return params.message
+  return 'Unknown error'
+}
