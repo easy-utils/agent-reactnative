@@ -50,6 +50,9 @@ export interface SessionRef {
   locale: string
   unreadCount: number
   lastMessagePreview: string
+  lastMessageAt: string
+  updatedAt: string
+  createdAt: string
 }
 
 export interface Identity {
@@ -132,9 +135,10 @@ export class AgentApi {
 
   // ---- sessions ----
 
+  /** Sessions ordered most-recent-first (lastMessageAt -> updatedAt -> createdAt). */
   async listSessions(): Promise<SessionRef[]> {
     const r = await this.agent.listSessions({})
-    return r.sessions.map(sessionFromPb)
+    return r.sessions.map(sessionFromPb).sort((a, b) => recency(b) - recency(a))
   }
 
   async createSession(name: string): Promise<string> {
@@ -308,7 +312,19 @@ function sessionFromPb(s: Session): SessionRef {
     locale: s.locale,
     unreadCount: 0,
     lastMessagePreview: '',
+    lastMessageAt: s.lastMessageAt,
+    updatedAt: s.updatedAt,
+    createdAt: s.createdAt,
   }
+}
+
+/** Epoch-ms recency: lastMessageAt -> updatedAt -> createdAt. */
+function recency(s: SessionRef): number {
+  for (const v of [s.lastMessageAt, s.updatedAt, s.createdAt]) {
+    const t = Date.parse(v)
+    if (!Number.isNaN(t)) return t
+  }
+  return 0
 }
 
 function messagesToLines(messages: Message[]): TranscriptLine[] {
